@@ -1,0 +1,14 @@
+<launch>
+<!--    <arg name="image_topic" default="/stereo/left/image_color"/>-->
+    <arg name="image_topic" default="/kitti/camera_color_left/image_raw"/>
+<!--    <arg name="velo_topic" default="/kitti/velo/pointcloud"/>-->
+    <arg name="velo_topic" default="/kitti/velo/pointcloud"/>
+    <arg name="engine_path" default="$(find person_detector)/yolov5s.engine"/>
+
+    <param name="image_topic" value="$(arg image_topic)"/>
+    <param name="engine_path" value="$(arg engine_path)"/>
+    <param name="velo_topic" value="$(arg velo_topic)"/>
+
+    <node pkg="person_detector" type="detector_node" name="detector_node" output="screen"/>
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find person_detector)/launch/detection.rviz"/>
+</launch>
