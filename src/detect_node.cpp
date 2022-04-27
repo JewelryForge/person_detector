@@ -48,7 +48,7 @@ bool parse_args(int argc, char **argv, std::string &engine, std::string &img_dir
 
 class Detector {
  public:
-  explicit Detector(const std::string &engine_name, std::vector<int> classes): classes(std::move(classes)) {
+  explicit Detector(const std::string &engine_name, std::vector<int> classes) : classes(std::move(classes)) {
     std::ifstream file(engine_name, std::ios::binary);
     assert(file.good());
     file.seekg(0, std::ifstream::end);
@@ -113,7 +113,7 @@ class Detector {
     }
     std::vector<Yolo::Detection> detections;
     nms(detections, prob, CONF_THRESH, NMS_THRESH, classes);
-    for (auto &det: detections) {
+    for (auto &det : detections) {
       cv::Rect r = get_rect(img, det.bbox);
       res.push_back(r);
       if (annotate) {
@@ -150,73 +150,201 @@ class Detector {
   std::vector<int> classes;
 };
 
+#include <vector>
+
 #include <ros/ros.h>
+#include <std_msgs/Float32MultiArray.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <visualization_msgs/Marker.h>
+#include <visualization_msgs/MarkerArray.h>
 #include <cv_bridge/cv_bridge.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <pcl/point_types.h>
-#include <pcl/PCLPointCloud2.h>
 #include <pcl/conversions.h>
-#include <pcl_ros/transforms.h>
-// #include "lidarmarkers_msg/lidarMarkers.h"
-#include "detection_core.h"
-#include "box.h"
+#include <pcl/features/moment_of_inertia_estimation.h>
+#include <pcl/kdtree/kdtree.h>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/point_types.h>
+#include <pcl/segmentation/extract_clusters.h>
 #include <Eigen/Core>
+#include <Eigen/Geometry>
 
-cv::Mat projectVelo2imageKitti(const cv::Mat &xyz) {
-  cv::Mat R_rect_00 = (cv::Mat_<double>(3, 3)
-      <<
-      9.998817e-01, 1.511453e-02, -2.841595e-03,
-      -1.511724e-02, 9.998853e-01, -9.338510e-04,
-      2.827154e-03, 9.766976e-04, 9.999955e-01);
-  cv::Mat P_rect_02 = (cv::Mat_<double>(3, 4)
-      <<
-      7.215377e+02, 0.000000e+00, 6.095593e+02, 4.485728e+01,
-      0.000000e+00, 7.215377e+02, 1.728540e+02, 2.163791e-01,
-      0.000000e+00, 0.000000e+00, 1.000000e+00, 2.745884e-03);
+//cv::Mat projectVelo2imageKitti(const cv::Mat &xyz) {
+//  cv::Mat R_rect_00 = (cv::Mat_<double>(3, 3)
+//      <<
+//      9.998817e-01, 1.511453e-02, -2.841595e-03,
+//      -1.511724e-02, 9.998853e-01, -9.338510e-04,
+//      2.827154e-03, 9.766976e-04, 9.999955e-01);
+//  cv::Mat P_rect_02 = (cv::Mat_<double>(3, 4)
+//      <<
+//      7.215377e+02, 0.000000e+00, 6.095593e+02, 4.485728e+01,
+//      0.000000e+00, 7.215377e+02, 1.728540e+02, 2.163791e-01,
+//      0.000000e+00, 0.000000e+00, 1.000000e+00, 2.745884e-03);
+//
+//  cv::Mat R = (cv::Mat_<double>(3, 3)
+//      <<
+//      7.533745e-03, -9.999714e-01, -6.166020e-04,
+//      1.480249e-02, 7.280733e-04, -9.998902e-01,
+//      9.998621e-01, 7.523790e-03, 1.480755e-02);
+//
+//  cv::Mat T = (cv::Mat_<double>(3, 1)
+//      << -4.069766e-03, -7.631618e-02, -2.717806e-01);
+//
+//  cv::Mat X = R_rect_00 * (R * xyz + T);
+//
+//  cv::Mat X_hom = (cv::Mat_<double>(4, 1)
+//      << X.at<double>(0, 0), X.at<double>(1, 0), X.at<double>(2, 0), 1);
+//
+//  cv::Mat imgCoord = P_rect_02 * X_hom;
+//  double x = imgCoord.at<double>(0, 0), y = imgCoord.at<double>(1, 0), z = imgCoord.at<double>(2, 0);
+////  ROS_INFO_STREAM("IMG: " << x / z << ' ' << y / z << ' ' << z);
+//  return (cv::Mat_<double>(3, 1) << x / z, y / z, z);
+//}
+//
+//cv::Mat projectVelo2imageCustom(const cv::Mat &xyz) {
+//  cv::Mat X_hom = (cv::Mat_<double>(4, 1)
+//      << xyz.at<double>(0, 0), xyz.at<double>(1, 0), xyz.at<double>(2, 0), 1);
+//  cv::Mat P_cam = (cv::Mat_<double>(3, 4)
+//      <<
+//      256, 0., 256, 0.,
+//      0., 256, 256, 0.,
+//      0., 0., 1., 0.);
+//  cv::Mat vehicle2velo = (cv::Mat_<double>(4, 4)
+//      << 1., 0., 0., -1.13,
+//      0., 1., 0., -0.08,
+//      0., 0., 1., -1.86,
+//      0, 0, 0, 1);
+//  cv::Mat vehicle2cam = (cv::Mat_<double>(4, 4)
+//      << 1., 0., 0., 0.39,
+//      0., 1., 0., 0.0,
+//      0., 0., 1., 1.2,
+//      0, 0, 0, 1);
+//
+//  cv::Mat imgCoord = P_cam * vehicle2cam * vehicle2velo.inv() * X_hom;
+//  double x = imgCoord.at<double>(0, 0), y = imgCoord.at<double>(1, 0), z = imgCoord.at<double>(2, 0);
+//
+//  return (cv::Mat_<double>(3, 1) << x / z, y / z, z);
+//}
 
-  cv::Mat R = (cv::Mat_<double>(3, 3)
-      <<
-      7.533745e-03, -9.999714e-01, -6.166020e-04,
-      1.480249e-02, 7.280733e-04, -9.998902e-01,
-      9.998621e-01, 7.523790e-03, 1.480755e-02);
+class ProjectionModelCustom {
+ public:
+  ProjectionModelCustom() {
+    Eigen::Affine3f P_cam = Eigen::Affine3f::Identity();
+    P_cam.matrix()
+        <<
+        256, 0., 256, 0.,
+        0., 256, 256, 0.,
+        0., 0., 1., 0.,
+        0, 0, 0, 1;
+    Eigen::Matrix3f R_cam;
+    R_cam
+        <<
+        0., -1, 0.,
+        0., 0., -1.,
+        1., 0., 0.;
+    Eigen::Isometry3f vehicle2velo;
+    vehicle2velo.matrix()
+        <<
+        1., 0., 0., 1.13,
+        0., 1., 0., -0.08,
+        0., 0., 1., -1.86,
+        0, 0, 0, 1;
+    Eigen::Isometry3f vehicle2cam;
+    vehicle2cam.matrix()
+        <<
+        1., 0., 0., -0.39,
+        0., 1., 0., 0.0,
+        0., 0., 1., -1.2,
+        0, 0, 0, 1;
+    transform = P_cam * R_cam * vehicle2cam /* * vehicle2velo.inverse() */;
+//    std::cout << transform.matrix() << std::endl;
+  }
 
-  cv::Mat T = (cv::Mat_<double>(3, 1)
-      << -4.069766e-03, -7.631618e-02, -2.717806e-01);
+  Eigen::Vector3f operator()(const Eigen::Vector3f &xyz) const {
+    Eigen::Vector3f uvw = transform * xyz;
+    float u = uvw[0], v = uvw[1], w = uvw[2];
+    return {u / w, v / w, w};
+  }
 
-  cv::Mat X = R_rect_00 * (R * xyz + T);
+  pcl::PointXYZ operator()(const pcl::PointXYZ &xyz) const {
+    auto uvw = operator()(Eigen::Vector3f{xyz.x, xyz.y, xyz.z});
+    return {uvw[0], uvw[1], uvw[2]};
+  }
+  Eigen::Affine3f transform;
+};
 
-  cv::Mat X_hom = (cv::Mat_<double>(4, 1)
-      << X.at<double>(0, 0), X.at<double>(1, 0), X.at<double>(2, 0), 1);
+visualization_msgs::MarkerArray::Ptr makeMarkerArray(
+    const std::vector<std::pair<pcl::PointXYZ, pcl::PointXYZ>> &aabb,
+    const std_msgs::Header &header) {
 
-  cv::Mat imgCoord = P_rect_02 * X_hom;
-  double x = imgCoord.at<double>(0, 0), y = imgCoord.at<double>(1, 0), z = imgCoord.at<double>(2, 0);
-//  ROS_INFO_STREAM("IMG: " << x / z << ' ' << y / z << ' ' << z);
-  return (cv::Mat_<double>(3, 1) << x / z, y / z, z);
-}
+  visualization_msgs::MarkerArray::Ptr markers(new visualization_msgs::MarkerArray);
+  int marker_id = 0;
+  for (const auto &bb : aabb) {
+    const auto &min_pt = bb.first, &max_pt = bb.second;
+    visualization_msgs::Marker marker;
+    marker.header = header;
+    marker.id = marker_id++;
+    marker.type = visualization_msgs::Marker::LINE_LIST;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.scale.x = 0.1;
+    marker.color.g = 1;
+    marker.color.a = 1;
+    marker.lifetime = ros::Duration(10);
+    marker.pose.orientation.w = 1.;
+    std::vector<geometry_msgs::Point> points(8);
+    points[0].x = min_pt.x;
+    points[0].y = min_pt.y;
+    points[0].z = min_pt.z;
+    points[1].x = max_pt.x;
+    points[1].y = min_pt.y;
+    points[1].z = min_pt.z;
+    points[2].x = max_pt.x;
+    points[2].y = max_pt.y;
+    points[2].z = min_pt.z;
+    points[3].x = min_pt.x;
+    points[3].y = max_pt.y;
+    points[3].z = min_pt.z;
+    points[4].x = min_pt.x;
+    points[4].y = min_pt.y;
+    points[4].z = max_pt.z;
+    points[5].x = max_pt.x;
+    points[5].y = min_pt.y;
+    points[5].z = max_pt.z;
+    points[6].x = max_pt.x;
+    points[6].y = max_pt.y;
+    points[6].z = max_pt.z;
+    points[7].x = min_pt.x;
+    points[7].y = max_pt.y;
+    points[7].z = max_pt.z;
 
-cv::Mat projectVelo2imageKaist(const cv::Mat &xyz) {
-  cv::Mat P_left = (cv::Mat_<float>(3, 4)
-      <<
-      7.8135803071870055e+02, 0., 6.1796599578857422e+02, 0.,
-      0., 7.8135803071870055e+02, 2.6354596138000488e+02, 0.,
-      0., 0., 1., 0.);
-  cv::Mat Vehicle2LeftVLP = (cv::Mat_<float>(4, 4)
-      <<
-      -0.516377, -0.702254, -0.490096, -0.334623,
-      0.491997, -0.711704, 0.501414, 0.431973,
-      -0.700923, 0.0177927, 0.713015, 1.94043,
-      0, 0, 0, 1);
-  cv::Mat Vehicle2Stereo = (cv::Mat_<float>(4, 4)
-      <<
-      -0.00680499, -0.0153215, 0.99985, 1.64239,
-      -0.999977, 0.000334627, -0.00680066, 0.247401,
-      -0.000230383, -0.999883, -0.0153234, 1.58411,
-      0, 0, 0, 1);
-  cv::Mat Tr = Vehicle2Stereo * Vehicle2LeftVLP.inv();
-  cv::Mat P_veloToImg = P_left * Tr;
-  return P_veloToImg * xyz;
+    marker.points.push_back(points[0]);
+    marker.points.push_back(points[1]);
+    marker.points.push_back(points[1]);
+    marker.points.push_back(points[2]);
+    marker.points.push_back(points[2]);
+    marker.points.push_back(points[3]);
+    marker.points.push_back(points[3]);
+    marker.points.push_back(points[0]);
+    marker.points.push_back(points[4]);
+    marker.points.push_back(points[5]);
+    marker.points.push_back(points[5]);
+    marker.points.push_back(points[6]);
+    marker.points.push_back(points[6]);
+    marker.points.push_back(points[7]);
+    marker.points.push_back(points[7]);
+    marker.points.push_back(points[4]);
+
+    marker.points.push_back(points[0]);
+    marker.points.push_back(points[4]);
+    marker.points.push_back(points[1]);
+    marker.points.push_back(points[5]);
+    marker.points.push_back(points[2]);
+    marker.points.push_back(points[6]);
+    marker.points.push_back(points[3]);
+    marker.points.push_back(points[7]);
+    markers->markers.push_back(marker);
+  }
+  return markers;
 }
 
 class DetectorNode {
@@ -224,103 +352,164 @@ class DetectorNode {
   explicit DetectorNode(ros::NodeHandle &nh,
                         const std::string &image_topic,
                         const std::string &velo_topic,
-                        const std::string &engine_name) : detector(engine_name, {2}),
-                                                          lidar_detector(nh),
-                                                          pointcloud(new pcl::PointCloud<pcl::PointXYZ>) {
-    image_sub = nh.subscribe<sensor_msgs::Image>(image_topic, 1, &DetectorNode::imageUpdate, this);
-    velo_sub = nh.subscribe<sensor_msgs::PointCloud2>(velo_topic, 1, &DetectorNode::detectAndPublish, this);
+                        const std::string &odom_topic,
+                        const std::string &target_topic,
+                        const std::string &engine_name,
+                        bool verbose) : detector_(engine_name, {0}),
+                                        verbose_(verbose),
+                                        pointcloud_(new pcl::PointCloud<pcl::PointXYZ>) {
+    image_sub_ = nh.subscribe<sensor_msgs::Image>(image_topic, 1, &DetectorNode::imageUpdate, this);
+    velo_sub_ = nh.subscribe<sensor_msgs::PointCloud2>(velo_topic, 1, &DetectorNode::detectAndPublish, this);
+    odom_sub_ = nh.subscribe<std_msgs::Float32MultiArray>(odom_topic, 1, &DetectorNode::odomUpdate, this);
     ROS_INFO_STREAM("Subscribing to " << image_topic << " and " << velo_topic);
-    anno_pub = nh.advertise<sensor_msgs::Image>("/annotated", 1);
-    bbox_pub = nh.advertise<visualization_msgs::MarkerArray>("markers", 1);
-    bbox_raw_pub = nh.advertise<visualization_msgs::MarkerArray>("all_markers", 1);
+    target_pub_ = nh.advertise<std_msgs::Float32MultiArray>(target_topic, 1);
+
+    velo_pub_ = nh.advertise<sensor_msgs::PointCloud2>("cone", 1);
+    anno_pub_ = nh.advertise<sensor_msgs::Image>("annotated", 1);
+    bbox_pub_ = nh.advertise<visualization_msgs::MarkerArray>("markers", 1);
   }
 
-  void detectAndPublish(const sensor_msgs::PointCloud2::ConstPtr &msg_pc2) {
-    if (image == nullptr) return;
-    pcl::fromROSMsg(*msg_pc2, *pointcloud);
-    if (pointcloud->empty()) return;
-    std::vector<BoundingBoxCalculator::BoundingBox> boxes;
-    lidar_detector.callback(msg_pc2, boxes);
+  void detectAndPublish(const sensor_msgs::PointCloud2::ConstPtr &pcl_msg) {
+    if (image_ == nullptr) return;
+    pcl::fromROSMsg(*pcl_msg, *pointcloud_);
+    if (pointcloud_->empty()) return;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_proj(new pcl::PointCloud<pcl::PointXYZ>);
+    for (const auto &point : *pointcloud_) {
+      pcl_proj->push_back(proj_model_(point));
+    }
 
     std::vector<cv::Rect> res;
-    detector.detect(image->image, res, true);
-    std::vector<cv::Mat> center_of_boxes_proj;
-    for (const auto &box: boxes) {
-      cv::Mat xyz = (cv::Mat_<double>(3, 1)
-          << box.center.x, box.center.y, box.center.z);
-      auto uvw = projectVelo2imageKitti(xyz);
-      center_of_boxes_proj.push_back(uvw);
-      if (uvw.at<double>(2, 0) > 0) {
-        cv::circle(image->image,
-                   cv::Point(uvw.at<double>(0, 0), uvw.at<double>(1, 0)),
-                   10,
-                   cv::Scalar(0, 0, 255),
-                   3);
+    detector_.detect(image_->image, res, verbose_);
+
+    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> clusters;
+    std::vector<std::pair<pcl::PointXYZ, pcl::PointXYZ>> aabbs;
+    std_msgs::Float32MultiArray targets;
+    auto rotation = Eigen::AngleAxisf(rpy_[2], Eigen::Vector3f::UnitZ()) *
+        Eigen::AngleAxisf(rpy_[1], Eigen::Vector3f::UnitY()) *
+        Eigen::AngleAxisf(rpy_[0], Eigen::Vector3f::UnitX());
+
+    for (const auto &rect : res) {
+      pcl::PointCloud<pcl::PointXYZ>::Ptr crude_cluster(new pcl::PointCloud<pcl::PointXYZ>);
+      clusters.push_back(crude_cluster);
+      if (verbose_) {
+        std::cout << rect.x << " " << rect.y << " " << rect.width << " " << rect.height << std::endl;
       }
-    }
-    std::vector<BoundingBoxCalculator::BoundingBox> useful_boxes;
-    for (const auto &rect: res) {
-      double u, v, w, minz = -1;
-      size_t minz_idx;
-      for (size_t i = 0; i < center_of_boxes_proj.size(); ++i) {
-        auto uvw = center_of_boxes_proj[i];
-        u = uvw.at<double>(0, 0);
-        v = uvw.at<double>(1, 0);
-        w = uvw.at<double>(2, 0);
-          if (w > 0 && rect.contains({static_cast<int>(u), static_cast<int>(v)})) {
-          ROS_INFO_STREAM(u << ' ' << v << ' ' << w << '\n'
-                            << rect << '\n');
-          if (minz == -1 || minz > w) {
-            minz_idx = i;
-            minz = w;
-          }
+      for (auto pt_raw = pointcloud_->begin(), pt_proj = pcl_proj->begin(); pt_raw != pointcloud_->end();
+           ++pt_raw, ++pt_proj) {
+        if (pt_proj->z > 0 and pt_proj->z < 100 and rect.contains({int(pt_proj->x), int(pt_proj->y)})) {
+          crude_cluster->push_back(*pt_raw);
         }
       }
-      ROS_INFO_STREAM("\n\n");
-      if (minz != -1) {
-        useful_boxes.push_back(boxes[minz_idx]);
-      } else {
-        // TODO: FINISH
+      if (not crude_cluster->empty()) {
+        pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
+        tree->setInputCloud(crude_cluster);
+        std::vector<pcl::PointIndices> cluster_indices;
+        pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
+        ec.setClusterTolerance(0.4);
+        ec.setMinClusterSize(5);
+        ec.setMaxClusterSize(100);
+        ec.setSearchMethod(tree);
+        ec.setInputCloud(crude_cluster);
+        ec.extract(cluster_indices);
+        int max_size = 0, argmax = -1;
+        for (int i = 0; i < cluster_indices.size(); ++i) {
+          int size = cluster_indices[i].indices.size();
+          if (size > max_size) {
+            max_size = size;
+            argmax = i;
+          }
+        }
+        if (argmax != -1) {
+          pcl::PointCloud<pcl::PointXYZ>::Ptr cluster(new pcl::PointCloud<pcl::PointXYZ>);
+          pcl::copyPointCloud(*crude_cluster, cluster_indices[argmax].indices, *cluster);
+
+          pcl::MomentOfInertiaEstimation<pcl::PointXYZ> feature_extractor;
+          feature_extractor.setInputCloud(cluster);
+          feature_extractor.compute();
+          std::pair<pcl::PointXYZ, pcl::PointXYZ> aabb;
+          feature_extractor.getAABB(aabb.first, aabb.second);
+          if (verbose_) {
+            std::cout << "AABB: " << aabb.first << " " << aabb.second << std::endl;
+          }
+          aabbs.push_back(aabb);
+          Eigen::Vector3f center{(aabb.first.x + aabb.second.x) / 2,
+                                 (aabb.first.y + aabb.second.y) / 2,
+                                 (aabb.first.z + aabb.second.z) / 2};
+          center = rotation * center + position_;
+          targets.data.push_back(center.x());
+          targets.data.push_back(center.y());
+          targets.data.push_back(center.z());
+        }
       }
     }
-    bbox_pub.publish(lidar_detector.makeMarkerArray(useful_boxes, msg_pc2->header));
-    bbox_raw_pub.publish(lidar_detector.makeMarkerArray(boxes, msg_pc2->header));
-    anno_pub.publish(image->toImageMsg());
+    target_pub_.publish(targets);
+    if (verbose_) {
+      pcl::PointCloud<pcl::PointXYZ> cone;
+      for (auto pt_raw = pointcloud_->begin(), pt_proj = pcl_proj->begin(); pt_raw != pointcloud_->end();
+           ++pt_raw, ++pt_proj) {
+        if (pt_proj->x > 0 and pt_proj->x < 512 and pt_proj->y > 0 and pt_proj->y < 512 and pt_proj->z > 0) {
+          cone.push_back(*pt_raw);
+        }
+      }
+      sensor_msgs::PointCloud2 cone_msg;
+      pcl::toROSMsg(cone, cone_msg);
+      cone_msg.header = pcl_msg->header;
+      velo_pub_.publish(cone_msg);
+
+      bbox_pub_.publish(makeMarkerArray(aabbs, pcl_msg->header));
+
+      for (auto &pt_proj : *pcl_proj) {
+        if (pt_proj.x > 0 and pt_proj.x < 512 and pt_proj.y > 0 and pt_proj.y < 512 and pt_proj.z > 0) {
+          image_->image.at<int>(int(pt_proj.y), int(pt_proj.x), 2) = 255;
+        }
+      }
+      anno_pub_.publish(image_->toImageMsg());
+    }
   }
 
   void imageUpdate(const sensor_msgs::Image::ConstPtr &image_msg) {
-    image = cv_bridge::toCvCopy(image_msg, "bgr8");
+    image_ = cv_bridge::toCvCopy(image_msg, "bgr8");
+  }
+
+  void odomUpdate(const std_msgs::Float32MultiArray::ConstPtr &odom) {
+    for (int i = 0; i < 3; ++i) {
+      position_[i] = odom->data[i];
+    }
+    for (int i = 0; i < 3; ++i) {
+      rpy_[i] = odom->data[i + 3] / 180 * M_PI;
+    }
   }
  private:
-  Detector detector;
-//  LidarDetector lidar_detector;
-  DetectionCore lidar_detector;
-  ros::Subscriber image_sub, velo_sub;
-  ros::Publisher anno_pub, bbox_pub, bbox_raw_pub;
-  cv_bridge::CvImagePtr image;
-  cv::Mat P_velo2img;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr pointcloud;
+  Detector detector_;
+  ProjectionModelCustom proj_model_;
+  ros::Subscriber image_sub_, velo_sub_, odom_sub_;
+  ros::Publisher target_pub_;
+  bool verbose_;
+  ros::Publisher anno_pub_, bbox_pub_, velo_pub_;
+
+  cv_bridge::CvImagePtr image_;
+  pcl::PointCloud<pcl::PointXYZ>::Ptr pointcloud_;
+  Eigen::Vector3f position_ = Eigen::Vector3f::Zero(), rpy_ = Eigen::Vector3f::Zero();
 };
 
 int main(int argc, char **argv) {
   cudaSetDevice(DEVICE);
   ros::init(argc, argv, "detector_node");
   ros::NodeHandle nh;
-  std::string image_topic, velo_topic, engine_path;
+  std::string image_topic, velo_topic, odom_topic, target_topic, engine_path;
+  bool verbose;
+
   nh.getParam("image_topic", image_topic);
   nh.getParam("velo_topic", velo_topic);
+  nh.getParam("odom_topic", odom_topic);
+  nh.getParam("target_topic", target_topic);
   nh.getParam("engine_path", engine_path);
-  auto detector = DetectorNode(nh, image_topic, velo_topic, engine_path);
+  nh.getParam("verbose", verbose);
+
+  auto detector = DetectorNode(nh, image_topic, velo_topic, odom_topic, target_topic, engine_path, verbose);
 
   while (ros::ok()) {
     ros::spinOnce();
   }
-
-  //  auto detector = Detector(engine_name);
-//  for (const auto &file_name: file_names) {
-//    cv::Mat img = cv::imread(img_dir + "/" + file_name);
-//    std::vector<Yolo::Detection> res;
-//    detector.detect(img, res, file_name);
-//  }
   return 0;
 }

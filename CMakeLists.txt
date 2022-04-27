@@ -25,14 +25,11 @@ find_package(catkin REQUIRED COMPONENTS
         rospy
         sensor_msgs
         cv_bridge
-        jsk_recognition_msgs
-        # lidarmarkers_msg
         )
 
 catkin_package(
         INCLUDE_DIRS include
-        #  LIBRARIES person_detector
-        CATKIN_DEPENDS roscpp rospy sensor_msgs cv_bridge jsk_recognition_msgs #lidarmarkers_msg
+        CATKIN_DEPENDS roscpp rospy sensor_msgs cv_bridge
         #  DEPENDS system_lib
 )
 
@@ -63,11 +60,9 @@ include_directories(${PCL_INCLUDE_DIRS}
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-add_library(libdetect src/box.cc src/detection_core.cc)
-
 cuda_add_executable(detector_node src/calibrator.cpp src/detect_node.cpp src/preprocess.cu)
 
-target_link_libraries(detector_node nvinfer cudart myplugins libdetect ${OpenCV_LIBS} ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+target_link_libraries(detector_node nvinfer cudart myplugins ${OpenCV_LIBS} ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
 
 if (UNIX)
