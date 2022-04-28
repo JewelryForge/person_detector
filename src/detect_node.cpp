@@ -288,6 +288,7 @@ visualization_msgs::MarkerArray::Ptr makeMarkerArray(
     marker.action = visualization_msgs::Marker::ADD;
     marker.scale.x = 0.1;
     marker.color.g = 1;
+    marker.color.b = 1;
     marker.color.a = 1;
     marker.lifetime = ros::Duration(10);
     marker.pose.orientation.w = 1.;
@@ -411,23 +412,28 @@ class DetectorNode {
         ec.setSearchMethod(tree);
         ec.setInputCloud(crude_cluster);
         ec.extract(cluster_indices);
-        int max_size = 0, argmax = -1;
+        pcl::MomentOfInertiaEstimation<pcl::PointXYZ> feature_extractor;
+        feature_extractor.setInputCloud(crude_cluster);
+        float min_distance = 0;
+        int argmin = -1;
+        std::vector<std::pair<pcl::PointXYZ, pcl::PointXYZ>> aabb_candidates;
         for (int i = 0; i < cluster_indices.size(); ++i) {
-          int size = cluster_indices[i].indices.size();
-          if (size > max_size) {
-            max_size = size;
-            argmax = i;
+          feature_extractor.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices[i]));
+          feature_extractor.compute();
+          pcl::PointXYZ aabb_min, aabb_max;
+          feature_extractor.getAABB(aabb_min, aabb_max);
+          aabb_candidates.emplace_back(aabb_min, aabb_max);
+          Eigen::Vector3f center{(aabb_min.x + aabb_max.x) / 2,
+                                 (aabb_min.y + aabb_max.y) / 2,
+                                 (aabb_min.z + aabb_max.z) / 2};
+          float distance = center.norm();
+          if (argmin == -1 or distance < min_distance) {
+            argmin = i;
+            min_distance = distance;
           }
         }
-        if (argmax != -1) {
-          pcl::PointCloud<pcl::PointXYZ>::Ptr cluster(new pcl::PointCloud<pcl::PointXYZ>);
-          pcl::copyPointCloud(*crude_cluster, cluster_indices[argmax].indices, *cluster);
-
-          pcl::MomentOfInertiaEstimation<pcl::PointXYZ> feature_extractor;
-          feature_extractor.setInputCloud(cluster);
-          feature_extractor.compute();
-          std::pair<pcl::PointXYZ, pcl::PointXYZ> aabb;
-          feature_extractor.getAABB(aabb.first, aabb.second);
+        if (argmin != -1) {
+          const auto &aabb = aabb_candidates[argmin];
           if (verbose_) {
             std::cout << "AABB: " << aabb.first << " " << aabb.second << std::endl;
           }
